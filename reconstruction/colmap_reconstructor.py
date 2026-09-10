@@ -167,17 +167,22 @@ class ColmapReconstructor(BaseReconstructor):
             "--image_path", str(image_dir),
             "--ImageReader.camera_model", fe.get("camera_model", "SIMPLE_RADIAL"),
         ]
+        max_img = str(fe.get("max_image_size", 3840))
+        max_feat = str(fe.get("max_num_features", 16384))
+        peak_th = str(fe.get("peak_threshold", 0.004))
         if ver >= (3, 9):
             cmd += [
                 "--FeatureExtraction.use_gpu", "0",
-                "--FeatureExtraction.max_image_size", str(fe.get("max_image_size", 3200)),
-                "--SiftExtraction.max_num_features", str(fe.get("max_num_features", 8192)),
+                "--FeatureExtraction.max_image_size", max_img,
+                "--SiftExtraction.max_num_features", max_feat,
+                "--SiftExtraction.peak_threshold", peak_th,
             ]
         else:
             cmd += [
                 "--SiftExtraction.use_gpu", "0",
-                "--SiftExtraction.max_image_size", str(fe.get("max_image_size", 3200)),
-                "--SiftExtraction.max_num_features", str(fe.get("max_num_features", 8192)),
+                "--SiftExtraction.max_image_size", max_img,
+                "--SiftExtraction.max_num_features", max_feat,
+                "--SiftExtraction.peak_threshold", peak_th,
             ]
         self._run(cmd, log, "feature_extractor")
 

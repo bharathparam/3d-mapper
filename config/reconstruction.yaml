@@ -1,20 +1,21 @@
 feature_extraction:
   camera_model: "SIMPLE_RADIAL"
   use_gpu: false
-  max_image_size: 3200
-  max_num_features: 8192
+  max_image_size: 3840
+  max_num_features: 16384
+  peak_threshold: 0.004
 
 feature_matching:
   matcher: "sequential"
-  overlap: 10
+  overlap: 15
   use_gpu: false
 
 mapper:
-  min_num_matches: 15
-  init_min_num_inliers: 100
-  abs_pose_min_num_inliers: 30
-  abs_pose_min_inlier_ratio: 0.25
-  max_reg_trials: 3
+  min_num_matches: 12
+  init_min_num_inliers: 80
+  abs_pose_min_num_inliers: 25
+  abs_pose_min_inlier_ratio: 0.20
+  max_reg_trials: 4
   num_threads: -1
 
 output:

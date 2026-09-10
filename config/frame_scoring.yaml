@@ -16,15 +16,15 @@ exposure:
 
 feature_detection:
   detector: "ORB"
-  max_features: 2000
-  normalization_count: 1500
+  max_features: 3000
+  normalization_count: 2000
   grid_size: 4
 
 selection:
   min_quality_threshold: 0.20
-  target_selection_ratio: 0.30
-  min_selected_frames: 20
-  max_selected_frames: 600
-  temporal_windows: 10
-  min_per_window: 2
-  ssim_redundancy_threshold: 0.92
+  target_selection_ratio: 0.35
+  min_selected_frames: 30
+  max_selected_frames: 400
+  temporal_windows: 15
+  min_per_window: 3
+  ssim_redundancy_threshold: 0.94

@@ -11,10 +11,10 @@ tools:
   ffprobe: null
 
 extraction:
-  fps: 2
-  max_frames: 2000
-  min_frames: 10
-  quality: 95
+  fps: 6
+  max_frames: 3000
+  min_frames: 15
+  quality: 98
   resize_width: null
 
 frame_selection:
@@ -24,11 +24,11 @@ reconstruction:
   config_file: "config/reconstruction.yaml"
 
 quality:
-  voxel_size: 0.5
-  high_confidence_min_points_per_voxel: 5
-  medium_confidence_min_points_per_voxel: 2
-  high_confidence_max_reprojection_error: 1.5
-  medium_confidence_max_reprojection_error: 3.0
+  voxel_size: 0.4
+  high_confidence_min_points_per_voxel: 6
+  medium_confidence_min_points_per_voxel: 3
+  high_confidence_max_reprojection_error: 1.2
+  medium_confidence_max_reprojection_error: 2.5
   min_cameras_per_region: 3
   score_weights:
     camera_registration: 0.30

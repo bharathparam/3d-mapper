@@ -324,11 +324,12 @@ export default function ThreeViewer({
       <PerspectiveCamera makeDefault position={[6, 5, 6]} fov={45} />
       
       {/* Studio Lighting Setup */}
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[15, 25, 20]} intensity={1.5} />
-      <directionalLight position={[-15, -10, -15]} intensity={0.6} />
-      <directionalLight position={[0, -15, 10]} intensity={0.3} />
-      <pointLight position={[0, 12, 0]} intensity={0.7} />
+      <ambientLight intensity={0.6} />
+      <hemisphereLight args={['#93c5fd', '#1e1b4b', 0.8]} />
+      <directionalLight position={[18, 28, 22]} intensity={1.6} castShadow />
+      <directionalLight position={[-18, 12, -18]} intensity={0.7} />
+      <directionalLight position={[0, -15, 10]} intensity={0.4} />
+      <pointLight position={[0, 12, 0]} intensity={0.6} />
 
       <CameraController
         radius={modelRadius}
