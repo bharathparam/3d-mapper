@@ -30,7 +30,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     // Load initial job state
-    api.getJob(jobId).then(setJob).catch(() => setError('Job not found'))
+    api.getJob(jobId).then((data) => {
+      setJob(data)
+      setStages(data.stages || [])
+      setProgress(data.progress || 0)
+      if (data.status === 'completed') {
+        navigate(`/jobs/${jobId}/viewer`)
+      }
+    }).catch(() => setError('Job not found'))
 
     // Subscribe to WebSocket events
     const sub = subscribeToJob(jobId, (event) => {

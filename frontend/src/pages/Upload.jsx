@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 
@@ -33,6 +33,13 @@ export default function Upload() {
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  const [recentJobs, setRecentJobs] = useState([])
+
+  useEffect(() => {
+    api.listJobs().then((jobs) => {
+      setRecentJobs(jobs || [])
+    }).catch(() => {})
+  }, [])
 
   const handleDrop = useCallback((e) => {
     e.preventDefault()
@@ -182,6 +189,46 @@ export default function Upload() {
             </>
           )}
         </button>
+
+        {/* Recent Reconstructions */}
+        {recentJobs.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <h3 style={{ marginBottom: 12, color: 'var(--text-secondary)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              Recent Reconstructions ({recentJobs.length})
+            </h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {recentJobs.slice(0, 5).map((j) => (
+                <div
+                  key={j.job_id}
+                  className="card"
+                  onClick={() => navigate(j.status === 'completed' ? `/jobs/${j.job_id}/viewer` : `/jobs/${j.job_id}/progress`)}
+                  style={{
+                    padding: '12px 16px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {j.video_filename || 'Drone Reconstruction'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                      {new Date(j.created_at).toLocaleTimeString()} · Method: {j.method}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    <span className={`badge ${j.status === 'completed' ? 'badge-emerald' : j.status === 'failed' ? 'badge-red' : 'badge-indigo'}`}>
+                      {j.status === 'completed' ? 'View 3D Model →' : j.status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Info */}
         <div style={{ display: 'flex', gap: 24, justifyContent: 'center' }}>
