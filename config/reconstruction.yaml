@@ -1,0 +1,28 @@
+feature_extraction:
+  camera_model: "SIMPLE_RADIAL"
+  use_gpu: false
+  max_image_size: 3200
+  max_num_features: 8192
+
+feature_matching:
+  matcher: "sequential"
+  overlap: 10
+  use_gpu: false
+
+mapper:
+  min_num_matches: 15
+  init_min_num_inliers: 100
+  abs_pose_min_num_inliers: 30
+  abs_pose_min_inlier_ratio: 0.25
+  max_reg_trials: 3
+  num_threads: -1
+
+output:
+  export_txt_model: true
+  export_ply: true
+  ply_filename: "sparse.ply"
+
+thresholds:
+  min_registration_rate: 0.30
+  min_registered_images: 5
+  max_acceptable_reprojection_error: 5.0

@@ -1,0 +1,38 @@
+app:
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+  projects_dir: "projects"
+  log_level: "INFO"
+
+tools:
+  colmap: null
+  ffmpeg: null
+  ffprobe: null
+
+extraction:
+  fps: 2
+  max_frames: 2000
+  min_frames: 10
+  quality: 95
+  resize_width: null
+
+frame_selection:
+  config_file: "config/frame_scoring.yaml"
+
+reconstruction:
+  config_file: "config/reconstruction.yaml"
+
+quality:
+  voxel_size: 0.5
+  high_confidence_min_points_per_voxel: 5
+  medium_confidence_min_points_per_voxel: 2
+  high_confidence_max_reprojection_error: 1.5
+  medium_confidence_max_reprojection_error: 3.0
+  min_cameras_per_region: 3
+  score_weights:
+    camera_registration: 0.30
+    track_length: 0.20
+    reprojection_error: 0.20
+    point_density: 0.15
+    spatial_coverage: 0.15
