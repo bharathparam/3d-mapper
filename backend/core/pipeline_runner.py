@@ -35,6 +35,8 @@ from reconstruction.colmap_reconstructor import ColmapReconstructor
 from reconstruction.surface_mesher import SurfaceMesher
 from reconstruction.ml_completer import MLPointCompleter
 from reconstruction.texture_mapper import TextureMapper
+from reconstruction.ai_depth_estimator import AIDepthEstimator
+from reconstruction.gaussian_splatter import GaussianSplatter
 from reconstruction.optimized_reconstructor import OptimizedReconstructor
 
 logger = logging.getLogger(__name__)
@@ -47,9 +49,11 @@ STAGES_OPTIMIZED = [
     ("feature_extraction",     "COLMAP: Feature Extraction", 50),
     ("feature_matching",       "COLMAP: Feature Matching",  65),
     ("sparse_reconstruction",  "Sparse Reconstruction",     70),
-    ("surface_meshing",        "3D Mesh & Hole Filling",    78),
-    ("ml_completion",          "ML Point Cloud Completion", 85),
+    ("surface_meshing",        "3D Mesh & Hole Filling",    75),
+    ("ml_completion",          "ML Point Cloud Completion", 80),
+    ("ai_depth_estimation",    "AI Monocular Depth Field",  85),
     ("texture_mapping",        "Photorealistic 3D Texturing", 90),
+    ("gaussian_splatting",     "3D Gaussian Splatting (3DGS)", 93),
     ("quality_analysis",       "Quality Analysis",          90),
     ("confidence_map",         "Confidence Map",            95),
     ("recommendations",        "Generate Recommendations",  100),

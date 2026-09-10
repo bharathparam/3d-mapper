@@ -15,8 +15,8 @@ function createSplatTexture() {
 
   const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
   gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)')
-  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.85)')
-  gradient.addColorStop(0.85, 'rgba(255, 255, 255, 0.25)')
+  gradient.addColorStop(0.45, 'rgba(255, 255, 255, 0.85)')
+  gradient.addColorStop(0.8, 'rgba(255, 255, 255, 0.25)')
   gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)')
 
   ctx.fillStyle = gradient
@@ -104,8 +104,8 @@ function TexturedGLTFModel({ url, wireframe = false, onRadiusCalculated }) {
   return <primitive ref={modelRef} object={gltf.scene} />
 }
 
-/* ── Photorealistic Neural Point Splat Component ───────────────────── */
-function NeuralPointCloud({ url, pointSize = 0.025, onRadiusCalculated, isMLDense = false }) {
+/* ── 3D Gaussian Splatting & Neural Radiance Splat Component ───────── */
+function GaussianSplatCloud({ url, pointSize = 0.035, is3DGS = false, onRadiusCalculated }) {
   const geometry = useLoader(PLYLoader, url)
 
   useEffect(() => {
@@ -128,13 +128,13 @@ function NeuralPointCloud({ url, pointSize = 0.025, onRadiusCalculated, isMLDens
       <bufferGeometry attach="geometry" {...geometry} />
       <pointsMaterial
         attach="material"
-        size={isMLDense ? pointSize * 0.8 : pointSize}
+        size={is3DGS ? pointSize * 1.35 : pointSize}
         map={splatTexture}
         vertexColors
         sizeAttenuation
         transparent
-        alphaTest={0.01}
-        opacity={isMLDense ? 0.98 : 0.94}
+        alphaTest={0.005}
+        opacity={is3DGS ? 0.99 : 0.94}
         blending={THREE.NormalBlending}
       />
     </points>
@@ -263,6 +263,8 @@ function CanvasCaptureBridge({ captureTrigger, onCaptureDone }) {
 /* ── Main Three.js Viewer Export ───────────────────────────────────── */
 export default function ThreeViewer({
   texturedGlbUrl,
+  gaussianPlyUrl,
+  aiDepthPlyUrl,
   sparsePlyUrl,
   primaryObjectPlyUrl,
   densePlyUrl,
@@ -271,9 +273,9 @@ export default function ThreeViewer({
   mlMeshPlyUrl,
   confidencePlyUrl,
   cameraPoses,
-  activeMode = 'textured',
+  activeMode = '3dgs',
   focusTargetOnly = true,
-  pointSize = 0.024,
+  pointSize = 0.025,
   wireframe = false,
   autoRotate = false,
   viewPreset = 'iso',
@@ -287,7 +289,11 @@ export default function ThreeViewer({
   const isTexturedGLB = activeMode === 'textured' && texturedGlbUrl
   let activePlyUrl = sparsePlyUrl
 
-  if (activeMode === 'mldense' && (mlDensePlyUrl || densePlyUrl)) {
+  if (activeMode === '3dgs' && (gaussianPlyUrl || primaryObjectPlyUrl)) {
+    activePlyUrl = gaussianPlyUrl || primaryObjectPlyUrl
+  } else if (activeMode === 'aidepth' && aiDepthPlyUrl) {
+    activePlyUrl = aiDepthPlyUrl
+  } else if (activeMode === 'mldense' && (mlDensePlyUrl || densePlyUrl)) {
     activePlyUrl = mlDensePlyUrl || densePlyUrl
   } else if (activeMode === 'mlmesh' && (mlMeshPlyUrl || meshPlyUrl)) {
     activePlyUrl = mlMeshPlyUrl || meshPlyUrl
@@ -302,7 +308,7 @@ export default function ThreeViewer({
   }
 
   const isMeshMode = activeMode === 'mesh' || activeMode === 'mlmesh'
-  const isMLDense = activeMode === 'mldense'
+  const is3DGS = activeMode === '3dgs'
 
   return (
     <Canvas
@@ -352,10 +358,10 @@ export default function ThreeViewer({
               onRadiusCalculated={setModelRadius}
             />
           ) : (
-            <NeuralPointCloud
+            <GaussianSplatCloud
               url={activePlyUrl}
               pointSize={pointSize}
-              isMLDense={isMLDense}
+              is3DGS={is3DGS}
               onRadiusCalculated={setModelRadius}
             />
           )
