@@ -1,13 +1,34 @@
-import React, { Suspense, useRef, useState, useEffect } from 'react'
+import React, { Suspense, useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react'
 import { Canvas, useLoader, useThree } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
 import * as THREE from 'three'
 
-/* ── Spatial Density Centering Helper ─────────────────────────────────
-   Finds the medoid/median of the 3D point cloud so the densest region
-   is pinned precisely at (0, 0, 0), completely ignoring far-off outliers.
-─────────────────────────────────────────────────────────────────────── */
+/* ── Generate Soft Circular Gaussian Splat Texture ─────────────────── */
+function createSplatTexture() {
+  const size = 64
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)')
+  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)')
+  gradient.addColorStop(0.85, 'rgba(255, 255, 255, 0.2)')
+  gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)')
+
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, size, size)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.needsUpdate = true
+  return texture
+}
+
+const splatTexture = createSplatTexture()
+
+/* ── Spatial Density Centering Helper ───────────────────────────────── */
 function centerGeometryOnDensityPeak(geometry) {
   if (!geometry || !geometry.attributes.position) return 5.0
   const pos = geometry.attributes.position.array
@@ -33,10 +54,8 @@ function centerGeometryOnDensityPeak(geometry) {
   const medY = sampleY[Math.floor(sampleY.length / 2)]
   const medZ = sampleZ[Math.floor(sampleZ.length / 2)]
 
-  // Translate all points so peak density is exactly at (0, 0, 0)
   geometry.translate(-medX, -medY, -medZ)
 
-  // Compute robust 90th percentile radius
   const dists = []
   const newPos = geometry.attributes.position.array
   for (let i = 0; i < count; i += step) {
@@ -52,8 +71,8 @@ function centerGeometryOnDensityPeak(geometry) {
   return Math.max(r90, 2.0)
 }
 
-/* ── Point Cloud with Density-Centering ────────────────────────────── */
-function PointCloud({ url, pointSize = 0.025, onRadiusCalculated }) {
+/* ── Photorealistic Neural Point Splat Component ───────────────────── */
+function NeuralPointCloud({ url, pointSize = 0.025, onRadiusCalculated, isMLDense = false }) {
   const geometry = useLoader(PLYLoader, url)
 
   useEffect(() => {
@@ -76,17 +95,20 @@ function PointCloud({ url, pointSize = 0.025, onRadiusCalculated }) {
       <bufferGeometry attach="geometry" {...geometry} />
       <pointsMaterial
         attach="material"
-        size={pointSize}
+        size={isMLDense ? pointSize * 0.75 : pointSize}
+        map={splatTexture}
         vertexColors
         sizeAttenuation
         transparent
-        opacity={0.96}
+        alphaTest={0.01}
+        opacity={isMLDense ? 0.98 : 0.94}
+        blending={THREE.NormalBlending}
       />
     </points>
   )
 }
 
-/* ── Surface Mesh with Density-Centering ───────────────────────────── */
+/* ── High-Fidelity Surface Mesh ────────────────────────────────────── */
 function SurfaceMesh({ url, wireframe = false, onRadiusCalculated }) {
   const geometry = useLoader(PLYLoader, url)
 
@@ -105,8 +127,8 @@ function SurfaceMesh({ url, wireframe = false, onRadiusCalculated }) {
       <meshStandardMaterial
         vertexColors={Boolean(geometry.attributes.color)}
         color={geometry.attributes.color ? undefined : '#818cf8'}
-        roughness={0.35}
-        metalness={0.08}
+        roughness={0.25}
+        metalness={0.05}
         wireframe={wireframe}
         side={THREE.DoubleSide}
       />
@@ -114,7 +136,7 @@ function SurfaceMesh({ url, wireframe = false, onRadiusCalculated }) {
   )
 }
 
-/* ── Camera Flight Trajectory & Markers ───────────────────────────── */
+/* ── Camera Trajectory & Frustums ─────────────────────────────────── */
 function CameraTrajectory({ poses, visible = true }) {
   if (!visible || !poses || poses.length < 2) return null
   const points = poses.map((p) => new THREE.Vector3(...p.center))
@@ -186,47 +208,82 @@ function CameraController({ radius = 8.0, viewPreset = 'iso', autoRotate = false
   return null
 }
 
+/* ── Canvas Capture Handler ───────────────────────────────────────── */
+function CanvasCaptureBridge({ captureTrigger, onCaptureDone }) {
+  const { gl, scene, camera } = useThree()
+
+  useEffect(() => {
+    if (captureTrigger > 0) {
+      gl.render(scene, camera)
+      const dataUrl = gl.domElement.toDataURL('image/png')
+      const link = document.createElement('a')
+      link.download = `drone3d-render-${Date.now()}.png`
+      link.href = dataUrl
+      link.click()
+      if (onCaptureDone) onCaptureDone()
+    }
+  }, [captureTrigger, gl, scene, camera, onCaptureDone])
+
+  return null
+}
+
 /* ── Main Three.js Viewer Export ───────────────────────────────────── */
 export default function ThreeViewer({
   sparsePlyUrl,
   primaryObjectPlyUrl,
   densePlyUrl,
   meshPlyUrl,
+  mlDensePlyUrl,
+  mlMeshPlyUrl,
   confidencePlyUrl,
   cameraPoses,
-  activeMode = 'dense',
+  activeMode = 'mldense',
   focusTargetOnly = true,
   pointSize = 0.025,
   wireframe = false,
   autoRotate = false,
   viewPreset = 'iso',
   targetFocus = null,
+  captureTrigger = 0,
+  onCaptureDone = null,
 }) {
   const controlsRef = useRef()
   const [modelRadius, setModelRadius] = useState(8.0)
 
   let activeUrl = sparsePlyUrl
-  if (activeMode === 'mesh' && meshPlyUrl) {
-    activeUrl = meshPlyUrl
+  if (activeMode === 'mldense' && (mlDensePlyUrl || densePlyUrl)) {
+    activeUrl = mlDensePlyUrl || densePlyUrl
+  } else if (activeMode === 'mlmesh' && (mlMeshPlyUrl || meshPlyUrl)) {
+    activeUrl = mlMeshPlyUrl || meshPlyUrl
   } else if (activeMode === 'dense' && densePlyUrl) {
     activeUrl = densePlyUrl
+  } else if (activeMode === 'mesh' && meshPlyUrl) {
+    activeUrl = meshPlyUrl
   } else if (activeMode === 'confidence' && confidencePlyUrl) {
     activeUrl = confidencePlyUrl
   } else if (focusTargetOnly && primaryObjectPlyUrl) {
     activeUrl = primaryObjectPlyUrl
   }
 
+  const isMeshMode = activeMode === 'mesh' || activeMode === 'mlmesh'
+  const isMLDense = activeMode === 'mldense'
+
   return (
     <Canvas
-      gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+      gl={{
+        antialias: true,
+        alpha: false,
+        powerPreference: 'high-performance',
+        preserveDrawingBuffer: true,
+      }}
       style={{ background: '#07070d', width: '100%', height: '100%' }}
       id="three-canvas"
     >
       <PerspectiveCamera makeDefault position={[6, 5, 6]} fov={45} />
       
-      {/* Lights */}
-      <ambientLight intensity={0.7} />
-      <directionalLight position={[15, 25, 20]} intensity={1.3} />
+      {/* Studio Lighting Setup */}
+      <ambientLight intensity={0.75} />
+      <directionalLight position={[15, 25, 20]} intensity={1.4} />
       <directionalLight position={[-15, -10, -15]} intensity={0.5} />
       <pointLight position={[0, 10, 0]} intensity={0.6} />
 
@@ -238,24 +295,24 @@ export default function ThreeViewer({
         controlsRef={controlsRef}
       />
 
+      <CanvasCaptureBridge
+        captureTrigger={captureTrigger}
+        onCaptureDone={onCaptureDone}
+      />
+
       {activeUrl && (
         <Suspense fallback={null}>
-          {activeMode === 'mesh' ? (
+          {isMeshMode ? (
             <SurfaceMesh
               url={activeUrl}
               wireframe={wireframe}
               onRadiusCalculated={setModelRadius}
             />
           ) : (
-            <PointCloud
+            <NeuralPointCloud
               url={activeUrl}
-              pointSize={
-                activeMode === 'confidence'
-                  ? pointSize * 1.2
-                  : activeMode === 'dense'
-                  ? pointSize * 0.8
-                  : pointSize
-              }
+              pointSize={pointSize}
+              isMLDense={isMLDense}
               onRadiusCalculated={setModelRadius}
             />
           )}
