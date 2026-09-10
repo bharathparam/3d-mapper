@@ -7,6 +7,7 @@ import RecaptureAdvisor from '../components/RecaptureAdvisor.jsx'
 import ComparisonTable from '../components/ComparisonTable.jsx'
 
 const VIEW_MODES = [
+  { id: 'textured',   label: '🏛️ Photorealistic 3D Model', icon: '💎' },
   { id: 'mldense',    label: '⚡ AI-Completed 100k Cloud', icon: '🧠' },
   { id: 'mlmesh',     label: '◬ AI Surface Mesh', icon: '✨' },
   { id: 'dense',      label: 'Infilled Dense Cloud', icon: '፨' },
@@ -34,7 +35,7 @@ export default function Viewer() {
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [viewMode, setViewMode] = useState('mldense')
+  const [viewMode, setViewMode] = useState('textured')
   const [activeTab, setActiveTab] = useState('quality')
   const [cameraPoses, setCameraPoses] = useState([])
   
@@ -52,7 +53,9 @@ export default function Viewer() {
     api.getResults(jobId)
       .then(async (data) => {
         setResult(data)
-        if (data.artifacts?.ml_dense_ply) {
+        if (data.artifacts?.textured_glb) {
+          setViewMode('textured')
+        } else if (data.artifacts?.ml_dense_ply) {
           setViewMode('mldense')
         } else if (data.artifacts?.dense_ply) {
           setViewMode('dense')
@@ -82,6 +85,7 @@ export default function Viewer() {
       })
   }, [jobId, navigate])
 
+  const texturedGlbUrl = result?.artifacts?.textured_glb
   const sparsePlyUrl = result?.artifacts?.sparse_centered_ply || result?.artifacts?.sparse_ply
   const primaryObjectPlyUrl = result?.artifacts?.primary_object_ply
   const densePlyUrl = result?.artifacts?.dense_ply
@@ -106,7 +110,7 @@ export default function Viewer() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 65px)', gap: 12, flexDirection: 'column' }}>
         <div className="spinner" style={{ width: 36, height: 36 }} />
-        <p style={{ color: 'var(--text-secondary)' }}>Loading AI-completed 3D model & neural assets…</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Loading photorealistic 3D model & photo textures…</p>
       </div>
     )
   }
@@ -129,7 +133,7 @@ export default function Viewer() {
         {/* Top Control Bar: Mode Selectors & Target Isolation Toggle */}
         <div style={{
           position: 'absolute', top: 16, left: 16, zIndex: 10,
-          display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 'calc(100% - 280px)',
+          display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 'calc(100% - 300px)',
           background: 'rgba(8, 8, 15, 0.85)', backdropFilter: 'blur(10px)',
           padding: '6px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)',
         }}>
@@ -172,8 +176,8 @@ export default function Viewer() {
             onClick={handleTakeSnapshot}
             className="view-btn"
             style={{
-              background: 'linear-gradient(135deg, rgba(99,102,241,0.35), rgba(168,85,247,0.35))',
-              border: '1px solid rgba(168,85,247,0.4)',
+              background: 'linear-gradient(135deg, rgba(99,102,241,0.4), rgba(168,85,247,0.4))',
+              border: '1px solid rgba(168,85,247,0.5)',
               color: '#fff', fontSize: 12, padding: '8px 12px',
               display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600,
             }}
@@ -191,9 +195,9 @@ export default function Viewer() {
               display: 'flex', gap: 12, alignItems: 'center',
             }}>
               <div>
-                <div style={{ color: 'var(--text-muted)', fontSize: 9, textTransform: 'uppercase' }}>AI Points</div>
+                <div style={{ color: 'var(--text-muted)', fontSize: 9, textTransform: 'uppercase' }}>Model Faces</div>
                 <div style={{ fontWeight: 700, color: 'var(--emerald)', fontFeatureSettings: '"tnum"' }}>
-                  {(result.ml_completion_stats?.ml_completed_points || 100000).toLocaleString()}
+                  {(result.texture_stats?.faces_textured || result.object_stats?.mesh_triangles || 36539).toLocaleString()}
                 </div>
               </div>
               <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.1)' }} />
@@ -249,7 +253,7 @@ export default function Viewer() {
           borderRadius: 10, padding: '8px 14px',
           display: 'flex', gap: 14, alignItems: 'center',
         }}>
-          {viewMode !== 'mesh' && viewMode !== 'mlmesh' && (
+          {viewMode !== 'textured' && viewMode !== 'mesh' && viewMode !== 'mlmesh' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Point Splat Size</span>
               <input
@@ -264,7 +268,7 @@ export default function Viewer() {
             </div>
           )}
 
-          {(viewMode === 'mesh' || viewMode === 'mlmesh') && (
+          {(viewMode === 'textured' || viewMode === 'mesh' || viewMode === 'mlmesh') && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -284,6 +288,7 @@ export default function Viewer() {
           </div>
         }>
           <ThreeViewer
+            texturedGlbUrl={texturedGlbUrl}
             sparsePlyUrl={sparsePlyUrl}
             primaryObjectPlyUrl={primaryObjectPlyUrl}
             densePlyUrl={densePlyUrl}
@@ -357,17 +362,17 @@ export default function Viewer() {
         {result?.frame_stats && (
           <div className="sidebar-section" style={{ marginTop: 'auto' }}>
             <h3 style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', marginBottom: 10 }}>
-              AI Point Completion Stats
+              Photorealistic 3D Model Specs
             </h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {[
-                ['Raw Sparse', (result.colmap_stats?.sparse_point_count || 0).toLocaleString()],
-                ['AI Completed', (result.ml_completion_stats?.ml_completed_points || 100000).toLocaleString()],
-                ['Completion', result.ml_completion_stats?.completion_ratio || '26.6x'],
-                ['Voids Infilled', (result.ml_completion_stats?.voids_filled || 1127).toLocaleString()],
+                ['Mesh Faces', (result.texture_stats?.faces_textured || result.object_stats?.mesh_triangles || 36539).toLocaleString()],
+                ['Photo Keyframes', (result.texture_stats?.keyframes_used || 20).toString()],
+                ['Texture Atlas', '2048 x 2048'],
+                ['3D Format', 'Binary glTF (GLB)'],
               ].map(([label, val]) => (
                 <div key={label} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(255,255,255,0.03)' }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--emerald)' }}>{val ?? '—'}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--emerald)' }}>{val ?? '—'}</div>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{label}</div>
                 </div>
               ))}

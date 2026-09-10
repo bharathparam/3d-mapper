@@ -34,6 +34,7 @@ from quality.recommender import RecaptureRecommender
 from reconstruction.colmap_reconstructor import ColmapReconstructor
 from reconstruction.surface_mesher import SurfaceMesher
 from reconstruction.ml_completer import MLPointCompleter
+from reconstruction.texture_mapper import TextureMapper
 from reconstruction.optimized_reconstructor import OptimizedReconstructor
 
 logger = logging.getLogger(__name__)
@@ -46,8 +47,9 @@ STAGES_OPTIMIZED = [
     ("feature_extraction",     "COLMAP: Feature Extraction", 50),
     ("feature_matching",       "COLMAP: Feature Matching",  65),
     ("sparse_reconstruction",  "Sparse Reconstruction",     70),
-    ("surface_meshing",        "3D Mesh & Hole Filling",    80),
-    ("ml_completion",          "ML Point Cloud Completion", 88),
+    ("surface_meshing",        "3D Mesh & Hole Filling",    78),
+    ("ml_completion",          "ML Point Cloud Completion", 85),
+    ("texture_mapping",        "Photorealistic 3D Texturing", 90),
     ("quality_analysis",       "Quality Analysis",          90),
     ("confidence_map",         "Confidence Map",            95),
     ("recommendations",        "Generate Recommendations",  100),

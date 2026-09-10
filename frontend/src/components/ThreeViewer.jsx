@@ -1,7 +1,8 @@
-import React, { Suspense, useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react'
+import React, { Suspense, useRef, useState, useEffect } from 'react'
 import { Canvas, useLoader, useThree } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import * as THREE from 'three'
 
 /* ── Generate Soft Circular Gaussian Splat Texture ─────────────────── */
@@ -14,8 +15,8 @@ function createSplatTexture() {
 
   const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
   gradient.addColorStop(0, 'rgba(255, 255, 255, 1.0)')
-  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)')
-  gradient.addColorStop(0.85, 'rgba(255, 255, 255, 0.2)')
+  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.85)')
+  gradient.addColorStop(0.85, 'rgba(255, 255, 255, 0.25)')
   gradient.addColorStop(1, 'rgba(255, 255, 255, 0.0)')
 
   ctx.fillStyle = gradient
@@ -71,6 +72,38 @@ function centerGeometryOnDensityPeak(geometry) {
   return Math.max(r90, 2.0)
 }
 
+/* ── Photorealistic Textured GLTF Model ────────────────────────────── */
+function TexturedGLTFModel({ url, wireframe = false, onRadiusCalculated }) {
+  const gltf = useLoader(GLTFLoader, url)
+  const modelRef = useRef()
+
+  useEffect(() => {
+    if (gltf && gltf.scene) {
+      const box = new THREE.Box3().setFromObject(gltf.scene)
+      const center = box.getCenter(new THREE.Vector3())
+      const size = box.getSize(new THREE.Vector3())
+      const radius = Math.max(size.x, size.y, size.z) / 2.0
+
+      gltf.scene.position.x = -center.x
+      gltf.scene.position.y = -center.y
+      gltf.scene.position.z = -center.z
+
+      gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+          child.material.wireframe = wireframe
+          child.material.roughness = 0.35
+          child.material.metalness = 0.05
+          child.material.side = THREE.DoubleSide
+        }
+      })
+
+      if (onRadiusCalculated) onRadiusCalculated(Math.max(radius, 3.0))
+    }
+  }, [gltf, wireframe, onRadiusCalculated])
+
+  return <primitive ref={modelRef} object={gltf.scene} />
+}
+
 /* ── Photorealistic Neural Point Splat Component ───────────────────── */
 function NeuralPointCloud({ url, pointSize = 0.025, onRadiusCalculated, isMLDense = false }) {
   const geometry = useLoader(PLYLoader, url)
@@ -95,7 +128,7 @@ function NeuralPointCloud({ url, pointSize = 0.025, onRadiusCalculated, isMLDens
       <bufferGeometry attach="geometry" {...geometry} />
       <pointsMaterial
         attach="material"
-        size={isMLDense ? pointSize * 0.75 : pointSize}
+        size={isMLDense ? pointSize * 0.8 : pointSize}
         map={splatTexture}
         vertexColors
         sizeAttenuation
@@ -193,7 +226,7 @@ function CameraController({ radius = 8.0, viewPreset = 'iso', autoRotate = false
     }
 
     camera.near = Math.max(dist * 0.01, 0.01)
-    camera.far = dist * 20
+    camera.far = dist * 25
     camera.lookAt(0, 0, 0)
     camera.updateProjectionMatrix()
 
@@ -217,7 +250,7 @@ function CanvasCaptureBridge({ captureTrigger, onCaptureDone }) {
       gl.render(scene, camera)
       const dataUrl = gl.domElement.toDataURL('image/png')
       const link = document.createElement('a')
-      link.download = `drone3d-render-${Date.now()}.png`
+      link.download = `drone3d-photorealistic-${Date.now()}.png`
       link.href = dataUrl
       link.click()
       if (onCaptureDone) onCaptureDone()
@@ -229,6 +262,7 @@ function CanvasCaptureBridge({ captureTrigger, onCaptureDone }) {
 
 /* ── Main Three.js Viewer Export ───────────────────────────────────── */
 export default function ThreeViewer({
+  texturedGlbUrl,
   sparsePlyUrl,
   primaryObjectPlyUrl,
   densePlyUrl,
@@ -237,9 +271,9 @@ export default function ThreeViewer({
   mlMeshPlyUrl,
   confidencePlyUrl,
   cameraPoses,
-  activeMode = 'mldense',
+  activeMode = 'textured',
   focusTargetOnly = true,
-  pointSize = 0.025,
+  pointSize = 0.024,
   wireframe = false,
   autoRotate = false,
   viewPreset = 'iso',
@@ -250,19 +284,21 @@ export default function ThreeViewer({
   const controlsRef = useRef()
   const [modelRadius, setModelRadius] = useState(8.0)
 
-  let activeUrl = sparsePlyUrl
+  const isTexturedGLB = activeMode === 'textured' && texturedGlbUrl
+  let activePlyUrl = sparsePlyUrl
+
   if (activeMode === 'mldense' && (mlDensePlyUrl || densePlyUrl)) {
-    activeUrl = mlDensePlyUrl || densePlyUrl
+    activePlyUrl = mlDensePlyUrl || densePlyUrl
   } else if (activeMode === 'mlmesh' && (mlMeshPlyUrl || meshPlyUrl)) {
-    activeUrl = mlMeshPlyUrl || meshPlyUrl
+    activePlyUrl = mlMeshPlyUrl || meshPlyUrl
   } else if (activeMode === 'dense' && densePlyUrl) {
-    activeUrl = densePlyUrl
+    activePlyUrl = densePlyUrl
   } else if (activeMode === 'mesh' && meshPlyUrl) {
-    activeUrl = meshPlyUrl
+    activePlyUrl = meshPlyUrl
   } else if (activeMode === 'confidence' && confidencePlyUrl) {
-    activeUrl = confidencePlyUrl
+    activePlyUrl = confidencePlyUrl
   } else if (focusTargetOnly && primaryObjectPlyUrl) {
-    activeUrl = primaryObjectPlyUrl
+    activePlyUrl = primaryObjectPlyUrl
   }
 
   const isMeshMode = activeMode === 'mesh' || activeMode === 'mlmesh'
@@ -282,10 +318,11 @@ export default function ThreeViewer({
       <PerspectiveCamera makeDefault position={[6, 5, 6]} fov={45} />
       
       {/* Studio Lighting Setup */}
-      <ambientLight intensity={0.75} />
-      <directionalLight position={[15, 25, 20]} intensity={1.4} />
-      <directionalLight position={[-15, -10, -15]} intensity={0.5} />
-      <pointLight position={[0, 10, 0]} intensity={0.6} />
+      <ambientLight intensity={0.8} />
+      <directionalLight position={[15, 25, 20]} intensity={1.5} />
+      <directionalLight position={[-15, -10, -15]} intensity={0.6} />
+      <directionalLight position={[0, -15, 10]} intensity={0.3} />
+      <pointLight position={[0, 12, 0]} intensity={0.7} />
 
       <CameraController
         radius={modelRadius}
@@ -300,28 +337,34 @@ export default function ThreeViewer({
         onCaptureDone={onCaptureDone}
       />
 
-      {activeUrl && (
-        <Suspense fallback={null}>
-          {isMeshMode ? (
+      <Suspense fallback={null}>
+        {isTexturedGLB ? (
+          <TexturedGLTFModel
+            url={texturedGlbUrl}
+            wireframe={wireframe}
+            onRadiusCalculated={setModelRadius}
+          />
+        ) : activePlyUrl ? (
+          isMeshMode ? (
             <SurfaceMesh
-              url={activeUrl}
+              url={activePlyUrl}
               wireframe={wireframe}
               onRadiusCalculated={setModelRadius}
             />
           ) : (
             <NeuralPointCloud
-              url={activeUrl}
+              url={activePlyUrl}
               pointSize={pointSize}
               isMLDense={isMLDense}
               onRadiusCalculated={setModelRadius}
             />
-          )}
+          )
+        ) : null}
 
-          {activeMode === 'cameras' && (
-            <CameraTrajectory poses={cameraPoses} visible={true} />
-          )}
-        </Suspense>
-      )}
+        {activeMode === 'cameras' && (
+          <CameraTrajectory poses={cameraPoses} visible={true} />
+        )}
+      </Suspense>
 
       <OrbitControls
         ref={controlsRef}
