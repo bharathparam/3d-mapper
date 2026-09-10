@@ -1,13 +1,12 @@
-import React, { Suspense, useRef, useState, useEffect, useCallback } from 'react'
-import { Canvas, useLoader, useThree, useFrame } from '@react-three/fiber'
+import React, { Suspense, useRef, useState, useEffect } from 'react'
+import { Canvas, useLoader, useThree } from '@react-three/fiber'
 import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
 import * as THREE from 'three'
 
-/* ── Point Cloud Component ────────────────────────────────────────── */
-function PointCloud({ url, pointSize = 0.02 }) {
+/* ── Point Cloud with Auto-Centering ──────────────────────────────── */
+function PointCloud({ url, pointSize = 0.025 }) {
   const geometry = useLoader(PLYLoader, url)
-  const pointsRef = useRef()
 
   useEffect(() => {
     if (geometry) {
@@ -23,7 +22,7 @@ function PointCloud({ url, pointSize = 0.02 }) {
   if (!geometry) return null
 
   return (
-    <points ref={pointsRef}>
+    <points>
       <bufferGeometry attach="geometry" {...geometry} />
       <pointsMaterial
         attach="material"
@@ -31,14 +30,14 @@ function PointCloud({ url, pointSize = 0.02 }) {
         vertexColors
         sizeAttenuation
         transparent
-        opacity={0.95}
+        opacity={0.96}
       />
     </points>
   )
 }
 
-/* ── Surface Mesh Component ────────────────────────────────────────── */
-function SurfaceMesh({ url, wireframe = false, opacity = 1.0 }) {
+/* ── Surface Mesh with Auto-Centering & Lighting ──────────────────── */
+function SurfaceMesh({ url, wireframe = false }) {
   const geometry = useLoader(PLYLoader, url)
 
   useEffect(() => {
@@ -55,18 +54,16 @@ function SurfaceMesh({ url, wireframe = false, opacity = 1.0 }) {
       <meshStandardMaterial
         vertexColors={Boolean(geometry.attributes.color)}
         color={geometry.attributes.color ? undefined : '#818cf8'}
-        roughness={0.4}
-        metalness={0.1}
+        roughness={0.35}
+        metalness={0.08}
         wireframe={wireframe}
         side={THREE.DoubleSide}
-        transparent={opacity < 1.0}
-        opacity={opacity}
       />
     </mesh>
   )
 }
 
-/* ── Camera Trajectory & Frustums ─────────────────────────────────── */
+/* ── Camera Trajectory & Markers ─────────────────────────────────── */
 function CameraTrajectory({ poses, visible = true }) {
   if (!visible || !poses || poses.length < 2) return null
   const points = poses.map((p) => new THREE.Vector3(...p.center))
@@ -89,45 +86,61 @@ function CameraTrajectory({ poses, visible = true }) {
   )
 }
 
-/* ── Camera Director (Spatial Presets & Focus) ────────────────────── */
-function CameraController({ targetPosition, viewPreset, autoRotate, controlsRef }) {
+/* ── Scene Camera Auto-Fit Controller ────────────────────────────── */
+function AutoFitScene({ url, viewPreset, controlsRef }) {
   const { camera } = useThree()
+  const geo = useLoader(PLYLoader, url)
 
   useEffect(() => {
-    if (!viewPreset) return
-    const dist = 6.0
-    switch (viewPreset) {
-      case 'top':
-        camera.position.set(0, dist * 1.5, 0.001)
-        camera.lookAt(0, 0, 0)
-        break
-      case 'front':
-        camera.position.set(0, 0, dist)
-        camera.lookAt(0, 0, 0)
-        break
-      case 'side':
-        camera.position.set(dist, 0, 0)
-        camera.lookAt(0, 0, 0)
-        break
-      case 'iso':
-      default:
-        camera.position.set(dist, dist * 0.8, dist)
-        camera.lookAt(0, 0, 0)
-        break
+    if (geo) {
+      geo.computeBoundingSphere()
+      const radius = Math.max(geo.boundingSphere?.radius || 4, 1.5)
+      const dist = radius * 2.2
+
+      switch (viewPreset) {
+        case 'top':
+          camera.position.set(0, dist * 1.4, 0.001)
+          break
+        case 'front':
+          camera.position.set(0, 0, dist)
+          break
+        case 'side':
+          camera.position.set(dist, 0, 0)
+          break
+        case 'iso':
+        default:
+          camera.position.set(dist * 0.8, dist * 0.6, dist * 0.8)
+          break
+      }
+
+      camera.near = radius * 0.005
+      camera.far = radius * 50
+      camera.lookAt(0, 0, 0)
+      camera.updateProjectionMatrix()
+
+      if (controlsRef.current) {
+        controlsRef.current.target.set(0, 0, 0)
+        controlsRef.current.maxDistance = radius * 10
+        controlsRef.current.minDistance = radius * 0.1
+        controlsRef.current.update()
+      }
     }
-    if (controlsRef.current) {
-      controlsRef.current.target.set(0, 0, 0)
-      controlsRef.current.update()
-    }
-  }, [viewPreset, camera, controlsRef])
+  }, [geo, viewPreset, camera, controlsRef])
+
+  return null
+}
+
+/* ── Camera Director for Target Coordinates Focus ─────────────────── */
+function TargetFocusDirector({ targetPosition, controlsRef }) {
+  const { camera } = useThree()
 
   useEffect(() => {
     if (targetPosition && controlsRef.current) {
       controlsRef.current.target.set(...targetPosition)
       camera.position.set(
-        targetPosition[0] + 2,
-        targetPosition[1] + 1.5,
-        targetPosition[2] + 2
+        targetPosition[0] + 3,
+        targetPosition[1] + 2,
+        targetPosition[2] + 3
       )
       controlsRef.current.update()
     }
@@ -136,14 +149,16 @@ function CameraController({ targetPosition, viewPreset, autoRotate, controlsRef 
   return null
 }
 
-/* ── Main Interactive 3D Viewer ───────────────────────────────────── */
+/* ── Main Interactive Three.js Canvas ─────────────────────────────── */
 export default function ThreeViewer({
   sparsePlyUrl,
   densePlyUrl,
   meshPlyUrl,
   confidencePlyUrl,
+  primaryObjectPlyUrl,
   cameraPoses,
-  activeMode = 'sparse',
+  activeMode = 'dense',
+  focusTargetOnly = true,
   pointSize = 0.025,
   wireframe = false,
   autoRotate = false,
@@ -152,55 +167,58 @@ export default function ThreeViewer({
 }) {
   const controlsRef = useRef()
 
+  // Select active geometry URL based on filter and mode
+  let activeUrl = sparsePlyUrl
+  if (activeMode === 'mesh' && meshPlyUrl) {
+    activeUrl = meshPlyUrl
+  } else if (activeMode === 'dense' && densePlyUrl) {
+    activeUrl = densePlyUrl
+  } else if (activeMode === 'confidence' && confidencePlyUrl) {
+    activeUrl = confidencePlyUrl
+  } else if (focusTargetOnly && primaryObjectPlyUrl) {
+    activeUrl = primaryObjectPlyUrl
+  }
+
   return (
     <Canvas
       gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
       style={{ background: '#07070d', width: '100%', height: '100%' }}
       id="three-canvas"
     >
-      <PerspectiveCamera makeDefault position={[5, 4, 5]} fov={50} near={0.01} far={1000} />
+      <PerspectiveCamera makeDefault position={[5, 4, 5]} fov={45} />
       
-      {/* Lighting Setup */}
+      {/* Lighting */}
       <ambientLight intensity={0.7} />
-      <directionalLight position={[10, 20, 15]} intensity={1.2} />
-      <directionalLight position={[-10, -10, -10]} intensity={0.4} />
-      <pointLight position={[0, 10, 0]} intensity={0.5} />
+      <directionalLight position={[15, 25, 20]} intensity={1.3} />
+      <directionalLight position={[-15, -10, -15]} intensity={0.5} />
+      <pointLight position={[0, 10, 0]} intensity={0.6} />
 
-      <CameraController
-        targetPosition={targetFocus}
-        viewPreset={viewPreset}
-        autoRotate={autoRotate}
-        controlsRef={controlsRef}
-      />
+      <TargetFocusDirector targetPosition={targetFocus} controlsRef={controlsRef} />
 
-      <Suspense fallback={null}>
-        {activeMode === 'sparse' && sparsePlyUrl && (
-          <PointCloud url={sparsePlyUrl} pointSize={pointSize} />
-        )}
+      {activeUrl && (
+        <Suspense fallback={null}>
+          <AutoFitScene url={activeUrl} viewPreset={viewPreset} controlsRef={controlsRef} />
 
-        {activeMode === 'dense' && (densePlyUrl || sparsePlyUrl) && (
-          <PointCloud url={densePlyUrl || sparsePlyUrl} pointSize={pointSize * 0.85} />
-        )}
-
-        {activeMode === 'mesh' && (meshPlyUrl || sparsePlyUrl) && (
-          meshPlyUrl ? (
-            <SurfaceMesh url={meshPlyUrl} wireframe={wireframe} />
+          {activeMode === 'mesh' ? (
+            <SurfaceMesh url={activeUrl} wireframe={wireframe} />
           ) : (
-            <PointCloud url={sparsePlyUrl} pointSize={pointSize} />
-          )
-        )}
+            <PointCloud
+              url={activeUrl}
+              pointSize={
+                activeMode === 'confidence'
+                  ? pointSize * 1.2
+                  : activeMode === 'dense'
+                  ? pointSize * 0.8
+                  : pointSize
+              }
+            />
+          )}
 
-        {activeMode === 'confidence' && (confidencePlyUrl || sparsePlyUrl) && (
-          <PointCloud url={confidencePlyUrl || sparsePlyUrl} pointSize={pointSize * 1.2} />
-        )}
-
-        {activeMode === 'cameras' && (
-          <>
-            {sparsePlyUrl && <PointCloud url={sparsePlyUrl} pointSize={pointSize * 0.7} />}
+          {activeMode === 'cameras' && (
             <CameraTrajectory poses={cameraPoses} visible={true} />
-          </>
-        )}
-      </Suspense>
+          )}
+        </Suspense>
+      )}
 
       <OrbitControls
         ref={controlsRef}
@@ -208,7 +226,7 @@ export default function ThreeViewer({
         dampingFactor={0.08}
         rotateSpeed={0.8}
         zoomSpeed={1.4}
-        panSpeed={0.8}
+        panSpeed={0.9}
         autoRotate={autoRotate}
         autoRotateSpeed={1.5}
       />

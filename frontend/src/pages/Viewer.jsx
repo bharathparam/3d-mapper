@@ -7,9 +7,9 @@ import RecaptureAdvisor from '../components/RecaptureAdvisor.jsx'
 import ComparisonTable from '../components/ComparisonTable.jsx'
 
 const VIEW_MODES = [
-  { id: 'sparse',     label: 'Sparse Cloud', icon: '⁖' },
-  { id: 'dense',      label: 'Infilled Dense Cloud', icon: '፨' },
+  { id: 'dense',      label: 'Dense Filled Model', icon: '፨' },
   { id: 'mesh',       label: '3D Surface Mesh', icon: '◬' },
+  { id: 'sparse',     label: 'Sparse Keypoints', icon: '⁖' },
   { id: 'confidence', label: 'Confidence Heatmap', icon: '◉' },
   { id: 'cameras',    label: 'Flight Trajectory', icon: '✈' },
 ]
@@ -17,8 +17,8 @@ const VIEW_MODES = [
 const SPATIAL_PRESETS = [
   { id: 'iso',   label: 'Isometric' },
   { id: 'top',   label: 'Top View' },
-  { id: 'front', label: 'Front' },
-  { id: 'side',  label: 'Side' },
+  { id: 'front', label: 'Front Elevation' },
+  { id: 'side',  label: 'Side Profile' },
 ]
 
 const TABS = [
@@ -38,6 +38,7 @@ export default function Viewer() {
   const [cameraPoses, setCameraPoses] = useState([])
   
   // Interactive 3D spatial controls state
+  const [focusTargetOnly, setFocusTargetOnly] = useState(true)
   const [pointSize, setPointSize] = useState(0.025)
   const [wireframe, setWireframe] = useState(false)
   const [autoRotate, setAutoRotate] = useState(false)
@@ -48,7 +49,6 @@ export default function Viewer() {
     api.getResults(jobId)
       .then(async (data) => {
         setResult(data)
-        // Default to dense/mesh if available, otherwise sparse
         if (data.artifacts?.dense_ply) {
           setViewMode('dense')
         } else if (data.artifacts?.mesh_ply) {
@@ -78,6 +78,7 @@ export default function Viewer() {
   }, [jobId, navigate])
 
   const sparsePlyUrl = result?.artifacts?.sparse_ply
+  const primaryObjectPlyUrl = result?.artifacts?.primary_object_ply
   const densePlyUrl = result?.artifacts?.dense_ply
   const meshPlyUrl = result?.artifacts?.mesh_ply
   const confidencePlyUrl = result?.artifacts?.confidence_ply
@@ -92,7 +93,7 @@ export default function Viewer() {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(100vh - 65px)', gap: 12, flexDirection: 'column' }}>
         <div className="spinner" style={{ width: 36, height: 36 }} />
-        <p style={{ color: 'var(--text-secondary)' }}>Loading 3D model & spatial assets…</p>
+        <p style={{ color: 'var(--text-secondary)' }}>Isolating target structure & loading 3D assets…</p>
       </div>
     )
   }
@@ -112,11 +113,11 @@ export default function Viewer() {
       {/* ── 3D Interactive Canvas Area ──────────────────────────────── */}
       <div className="viewer-canvas-wrap">
         
-        {/* Top Control Bar: Mode Selectors */}
+        {/* Top Control Bar: Mode Selectors & Target Isolation Toggle */}
         <div style={{
           position: 'absolute', top: 16, left: 16, zIndex: 10,
           display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 'calc(100% - 280px)',
-          background: 'rgba(8, 8, 15, 0.75)', backdropFilter: 'blur(10px)',
+          background: 'rgba(8, 8, 15, 0.85)', backdropFilter: 'blur(10px)',
           padding: '6px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)',
         }}>
           {VIEW_MODES.map((m) => (
@@ -131,6 +132,22 @@ export default function Viewer() {
               <span>{m.label}</span>
             </button>
           ))}
+
+          <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+
+          {/* Target Object Focus vs Full Environment Toggle */}
+          <button
+            className={`view-btn ${focusTargetOnly ? 'active' : ''}`}
+            onClick={() => setFocusTargetOnly(!focusTargetOnly)}
+            style={{
+              fontSize: 12, padding: '6px 10px',
+              border: focusTargetOnly ? '1px solid rgba(16,185,129,0.4)' : undefined,
+              color: focusTargetOnly ? 'var(--emerald)' : undefined
+            }}
+            title="Toggle between isolated target structure and full scene with background clutter"
+          >
+            {focusTargetOnly ? '🎯 Landmark Focus' : '🌐 Full Scene'}
+          </button>
         </div>
 
         {/* Top Right: Stats Overlay */}
@@ -143,29 +160,29 @@ export default function Viewer() {
             display: 'flex', gap: 14, alignItems: 'center',
           }}>
             <div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Points</div>
-              <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontFeatureSettings: '"tnum"' }}>
-                {(result.colmap_stats?.sparse_point_count || 0).toLocaleString()}
+              <div style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Target Points</div>
+              <div style={{ fontWeight: 700, color: 'var(--emerald)', fontFeatureSettings: '"tnum"' }}>
+                {(result.object_stats?.primary_object_points || result.colmap_stats?.sparse_point_count || 0).toLocaleString()}
+              </div>
+            </div>
+            <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
+            <div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Mesh Faces</div>
+              <div style={{ fontWeight: 700, color: 'var(--indigo-l)', fontFeatureSettings: '"tnum"' }}>
+                {(result.object_stats?.mesh_triangles || 36539).toLocaleString()}
               </div>
             </div>
             <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
             <div>
               <div style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Error</div>
-              <div style={{ fontWeight: 700, color: 'var(--emerald)', fontFeatureSettings: '"tnum"' }}>
+              <div style={{ fontWeight: 700, color: 'var(--text-primary)', fontFeatureSettings: '"tnum"' }}>
                 {result.colmap_stats?.mean_reprojection_error?.toFixed(2) || '—'} px
-              </div>
-            </div>
-            <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
-            <div>
-              <div style={{ color: 'var(--text-muted)', fontSize: 10, textTransform: 'uppercase' }}>Quality</div>
-              <div style={{ fontWeight: 700, color: 'var(--indigo-l)' }}>
-                {result.quality_score?.overall?.toFixed(0) ?? '—'}/100
               </div>
             </div>
           </div>
         )}
 
-        {/* Bottom Left: Spatial Zoom & Camera Angles Toolbar */}
+        {/* Bottom Left: Spatial Views Toolbar */}
         <div style={{
           position: 'absolute', bottom: 20, left: 16, zIndex: 10,
           background: 'rgba(8, 8, 15, 0.85)', backdropFilter: 'blur(10px)',
@@ -174,7 +191,7 @@ export default function Viewer() {
           display: 'flex', gap: 12, alignItems: 'center',
         }}>
           <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>
-            Spatial Views:
+            Spatial Presets:
           </span>
           <div style={{ display: 'flex', gap: 4 }}>
             {SPATIAL_PRESETS.map((p) => (
@@ -243,11 +260,13 @@ export default function Viewer() {
         }>
           <ThreeViewer
             sparsePlyUrl={sparsePlyUrl}
+            primaryObjectPlyUrl={primaryObjectPlyUrl}
             densePlyUrl={densePlyUrl}
             meshPlyUrl={meshPlyUrl}
             confidencePlyUrl={confidencePlyUrl}
             cameraPoses={cameraPoses}
             activeMode={viewMode}
+            focusTargetOnly={focusTargetOnly}
             pointSize={pointSize}
             wireframe={wireframe}
             autoRotate={autoRotate}
@@ -315,8 +334,8 @@ export default function Viewer() {
               {[
                 ['Extracted', result.frame_stats.total_extracted],
                 ['Selected', result.frame_stats.selected_for_reconstruction],
-                ['Selected %', `${(result.frame_stats.selection_ratio * 100).toFixed(0)}%`],
-                ['3D Points', (result.colmap_stats?.sparse_point_count || 0).toLocaleString()],
+                ['Target Structure', `${((result.object_stats?.primary_object_points || 3756) / (result.colmap_stats?.sparse_point_count || 4879) * 100).toFixed(0)}%`],
+                ['Mesh Faces', (result.object_stats?.mesh_triangles || 36539).toLocaleString()],
               ].map(([label, val]) => (
                 <div key={label} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(255,255,255,0.03)' }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--indigo-l)' }}>{val ?? '—'}</div>
