@@ -140,24 +140,45 @@ class SurfaceMesher:
         else:
             primary_cloud = inliers_aligned
 
-        # ── Step 6: Poisson Surface Meshing ──────────────────────────────────
-        primary_cloud.estimate_normals(
+        # ── Step 6: High-Fidelity Surface Meshing (Poisson -> Alpha/BPA Fallback) ──
+        reg_cloud = primary_cloud.voxel_down_sample(voxel_size=0.08)
+        reg_cloud.estimate_normals(
             search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.4, max_nn=30)
         )
-        primary_cloud.orient_normals_consistent_tangent_plane(k=15)
+        reg_cloud.orient_normals_consistent_tangent_plane(k=15)
 
-        mesh, mesh_densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-            primary_cloud, depth=self.depth, scale=1.1, linear_fit=True
-        )
+        mesh = None
+        mesher_used = "poisson_density_centered"
+        try:
+            p_mesh, mesh_densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+                reg_cloud, depth=self.depth, scale=1.1, linear_fit=True
+            )
+            mesh_densities = np.asarray(mesh_densities)
+            if len(mesh_densities) > 0:
+                p_mesh.remove_vertices_by_mask(mesh_densities < np.quantile(mesh_densities, 0.08))
+            p_mesh.remove_degenerate_triangles()
+            p_mesh.remove_duplicated_triangles()
+            p_mesh.remove_duplicated_vertices()
+            p_mesh.remove_non_manifold_edges()
+            if len(p_mesh.triangles) > 100:
+                mesh = p_mesh
+        except Exception as e:
+            logger.warning("Poisson meshing fallback due to: %s", e)
 
-        mesh_densities = np.asarray(mesh_densities)
-        if len(mesh_densities) > 0:
-            mesh.remove_vertices_by_mask(mesh_densities < np.quantile(mesh_densities, 0.08))
+        if mesh is None or len(mesh.triangles) == 0:
+            distances = primary_cloud.compute_nearest_neighbor_distance()
+            avg_dist = float(np.mean(distances)) if len(distances) > 0 else 0.05
+            mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_alpha_shape(primary_cloud, alpha=avg_dist * 4.5)
+            mesher_used = "alpha_shape_density_centered"
+            if len(mesh.triangles) == 0:
+                radii = [avg_dist * 1.5, avg_dist * 3.0, avg_dist * 6.0]
+                mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(primary_cloud, o3d.utility.DoubleVector(radii))
+                mesher_used = "bpa_density_centered"
 
         mesh.remove_degenerate_triangles()
         mesh.remove_duplicated_triangles()
         mesh.remove_duplicated_vertices()
-        mesh.remove_non_manifold_edges()
+        mesh.compute_vertex_normals()
 
         # Vertex coloring
         if primary_cloud.has_colors():

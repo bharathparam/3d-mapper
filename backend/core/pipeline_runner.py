@@ -326,20 +326,94 @@ class PipelineRunner:
                message=f"{len(recs)} recapture recommendation(s) generated",
                progress=100)
 
+        # ═══════════════════════════════════════════════════════════════════
+        # PHASE G: AI 3D Infilling, Texture Mapping & Gaussian Splatting
+        # ═══════════════════════════════════════════════════════════════════
+        dense_dir = job_dir / "processing" / "dense"
+        dense_dir.mkdir(parents=True, exist_ok=True)
+        sparse_txt_dir = sparse_out / "sparse_txt" if (sparse_out / "sparse_txt").exists() else colmap_out.model_dir
+
+        try:
+            # 1. Surface Meshing & Peak Spatial Density Centering
+            mesher = SurfaceMesher()
+            mesher.process(
+                input_ply=output_dir / "sparse.ply",
+                output_mesh_ply=dense_dir / "mesh.ply",
+                output_mesh_obj=dense_dir / "mesh.obj",
+                output_dense_ply=dense_dir / "dense.ply",
+                output_primary_ply=dense_dir / "primary_cloud.ply",
+                output_centered_sparse_ply=output_dir / "sparse.ply",
+            )
+        except Exception as e:
+            logger.warning("Meshing stage warning: %s", e)
+
+        try:
+            # 2. ML Point Cloud Completion & Void Infilling
+            completer = MLPointCompleter(target_points=80000)
+            completer.complete_point_cloud(
+                input_ply=dense_dir / "primary_cloud.ply" if (dense_dir / "primary_cloud.ply").exists() else output_dir / "sparse.ply",
+                output_completed_ply=dense_dir / "ml_completed_dense.ply",
+                output_completed_mesh=dense_dir / "ml_completed_mesh.ply",
+            )
+        except Exception as e:
+            logger.warning("ML Point completion warning: %s", e)
+
+        try:
+            # 3. Multi-View Real-Photo Texture Mapping -> GLB
+            target_mesh = dense_dir / "ml_completed_mesh.ply" if (dense_dir / "ml_completed_mesh.ply").exists() else dense_dir / "mesh.ply"
+            if target_mesh.exists():
+                tex_mapper = TextureMapper(atlas_size=2048)
+                tex_mapper.generate_textured_mesh(
+                    mesh_ply_path=target_mesh,
+                    keyframes_dir=kf_dir,
+                    sparse_txt_dir=sparse_txt_dir,
+                    output_glb_path=dense_dir / "textured_model.glb",
+                    output_obj_path=dense_dir / "textured_model.obj",
+                    output_texture_png=dense_dir / "texture_atlas.png",
+                )
+        except Exception as e:
+            logger.warning("Texture mapping warning: %s", e)
+
+        try:
+            # 4. AI Monocular Metric Depth Unprojection
+            depth_est = AIDepthEstimator(target_cloud_points=120000, stride=8)
+            depth_est.estimate_dense_depth_cloud(
+                keyframes_dir=kf_dir,
+                sparse_txt_dir=sparse_txt_dir,
+                output_dense_ply=dense_dir / "ai_depth_dense.ply",
+            )
+        except Exception as e:
+            logger.warning("AI Depth unprojection warning: %s", e)
+
+        try:
+            # 5. 3D Gaussian Splatting Radiance Field Export
+            splat_source = dense_dir / "ml_completed_dense.ply" if (dense_dir / "ml_completed_dense.ply").exists() else output_dir / "sparse.ply"
+            splatter = GaussianSplatter()
+            splatter.generate_splats_from_point_cloud(
+                input_ply=splat_source,
+                output_splat_path=dense_dir / "point_cloud.splat",
+                output_ply_path=dense_dir / "point_cloud_3dgs.ply",
+            )
+        except Exception as e:
+            logger.warning("Gaussian splatting warning: %s", e)
+
+        # Copy all processed 3D assets to output directory
+        for f in dense_dir.glob("*"):
+            if f.is_file():
+                shutil.copy2(f, output_dir / f.name)
+
         # ── Build final result ────────────────────────────────────────────
         artifacts: dict[str, str] = {}
-        if (output_dir / "sparse.ply").exists():
-            artifacts["sparse_ply"] = f"/api/files/{job.job_id}/output/sparse.ply"
-        if (output_dir / "dense_interpolated.ply").exists():
-            artifacts["dense_ply"] = f"/api/files/{job.job_id}/output/dense_interpolated.ply"
-        if (output_dir / "mesh.ply").exists():
-            artifacts["mesh_ply"] = f"/api/files/{job.job_id}/output/mesh.ply"
-        if (output_dir / "mesh.obj").exists():
-            artifacts["mesh_obj"] = f"/api/files/{job.job_id}/output/mesh.obj"
-        if (output_dir / "confidence.ply").exists():
-            artifacts["confidence_ply"] = f"/api/files/{job.job_id}/output/confidence.ply"
-        if (output_dir / "camera_poses.json").exists():
-            artifacts["camera_poses"] = f"/api/files/{job.job_id}/output/camera_poses.json"
+        for fname in [
+            "sparse.ply", "dense.ply", "mesh.ply", "mesh.obj", "confidence.ply",
+            "camera_poses.json", "ml_completed_dense.ply", "ml_completed_mesh.ply",
+            "textured_model.glb", "textured_model.obj", "texture_atlas.png",
+            "ai_depth_dense.ply", "point_cloud.splat", "point_cloud_3dgs.ply",
+            "primary_cloud.ply",
+        ]:
+            if (output_dir / fname).exists():
+                key = fname.replace(".", "_")
+                artifacts[key] = f"/api/files/{job.job_id}/output/{fname}"
 
         failure_region_models = [
             FailureRegion(
