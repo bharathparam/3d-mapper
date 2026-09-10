@@ -32,6 +32,7 @@ from quality.failure_classifier import FailureClassifier
 from quality.metrics import ReconstructionQualityEngine
 from quality.recommender import RecaptureRecommender
 from reconstruction.colmap_reconstructor import ColmapReconstructor
+from reconstruction.surface_mesher import SurfaceMesher
 from reconstruction.optimized_reconstructor import OptimizedReconstructor
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,8 @@ STAGES_OPTIMIZED = [
     ("keyframe_selection",     "Select Keyframes",          30),
     ("feature_extraction",     "COLMAP: Feature Extraction", 50),
     ("feature_matching",       "COLMAP: Feature Matching",  65),
-    ("sparse_reconstruction",  "Sparse Reconstruction",     80),
+    ("sparse_reconstruction",  "Sparse Reconstruction",     75),
+    ("surface_meshing",        "3D Mesh & Hole Filling",    85),
     ("quality_analysis",       "Quality Analysis",          90),
     ("confidence_map",         "Confidence Map",            95),
     ("recommendations",        "Generate Recommendations",  100),
@@ -320,6 +322,12 @@ class PipelineRunner:
         artifacts: dict[str, str] = {}
         if (output_dir / "sparse.ply").exists():
             artifacts["sparse_ply"] = f"/api/files/{job.job_id}/output/sparse.ply"
+        if (output_dir / "dense_interpolated.ply").exists():
+            artifacts["dense_ply"] = f"/api/files/{job.job_id}/output/dense_interpolated.ply"
+        if (output_dir / "mesh.ply").exists():
+            artifacts["mesh_ply"] = f"/api/files/{job.job_id}/output/mesh.ply"
+        if (output_dir / "mesh.obj").exists():
+            artifacts["mesh_obj"] = f"/api/files/{job.job_id}/output/mesh.obj"
         if (output_dir / "confidence.ply").exists():
             artifacts["confidence_ply"] = f"/api/files/{job.job_id}/output/confidence.ply"
         if (output_dir / "camera_poses.json").exists():

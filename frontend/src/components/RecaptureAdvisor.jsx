@@ -14,7 +14,7 @@ const FAILURE_ICONS = {
   textureless:       '🔲',
 }
 
-export default function RecaptureAdvisor({ failureRegions = [], recommendations = [] }) {
+export default function RecaptureAdvisor({ failureRegions = [], recommendations = [], onSelectRegion }) {
   const [open, setOpen] = useState(null)
 
   if (!failureRegions.length) {
@@ -31,15 +31,15 @@ export default function RecaptureAdvisor({ failureRegions = [], recommendations 
   }
 
   return (
-    <div style={{ padding: 20 }}>
-      <p style={{ fontSize: 12, marginBottom: 12 }}>
-        {failureRegions.length} region{failureRegions.length !== 1 ? 's' : ''} need improved capture:
+    <div style={{ padding: 16 }}>
+      <p style={{ fontSize: 12, marginBottom: 12, color: 'var(--text-secondary)' }}>
+        {failureRegions.length} region{failureRegions.length !== 1 ? 's' : ''} diagnosed with drone recapture tips:
       </p>
-      {failureRegions.map((region, i) => {
+      {failureRegions.slice(0, 50).map((region, i) => {
         const rec = recommendations[i]
         const isOpen = open === i
         return (
-          <div key={i} className={`region-item ${rec?.priority || 'low'}`} id={`region-${i}`}>
+          <div key={i} className={`region-item ${rec?.priority || 'low'}`} id={`region-${i}`} style={{ marginBottom: 8 }}>
             <div
               style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
               onClick={() => setOpen(isOpen ? null : i)}
@@ -53,11 +53,26 @@ export default function RecaptureAdvisor({ failureRegions = [], recommendations 
                     {rec?.priority || 'low'}
                   </span>
                 </div>
-                <p style={{ margin: '2px 0 0', fontSize: 11 }}>
+                <p style={{ margin: '2px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
                   {region.point_count} pts · {region.camera_count} cameras · conf {(region.confidence_score * 100).toFixed(0)}%
                 </p>
               </div>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {onSelectRegion && region.center && (
+                  <button
+                    className="view-btn"
+                    style={{ fontSize: 10, padding: '2px 6px', background: 'rgba(99,102,241,0.2)' }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSelectRegion(region)
+                    }}
+                    title="Focus 3D camera on this region"
+                  >
+                    🎯 Focus
+                  </button>
+                )}
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+              </div>
             </div>
             {isOpen && rec && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
