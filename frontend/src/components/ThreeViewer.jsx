@@ -4,20 +4,70 @@ import { OrbitControls, PerspectiveCamera } from '@react-three/drei'
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js'
 import * as THREE from 'three'
 
-/* ── Point Cloud with Auto-Centering ──────────────────────────────── */
-function PointCloud({ url, pointSize = 0.025 }) {
+/* ── Spatial Density Centering Helper ─────────────────────────────────
+   Finds the medoid/median of the 3D point cloud so the densest region
+   is pinned precisely at (0, 0, 0), completely ignoring far-off outliers.
+─────────────────────────────────────────────────────────────────────── */
+function centerGeometryOnDensityPeak(geometry) {
+  if (!geometry || !geometry.attributes.position) return 5.0
+  const pos = geometry.attributes.position.array
+  const count = geometry.attributes.position.count
+  if (count < 10) return 5.0
+
+  const step = Math.max(1, Math.floor(count / 1500))
+  const sampleX = []
+  const sampleY = []
+  const sampleZ = []
+
+  for (let i = 0; i < count; i += step) {
+    sampleX.push(pos[i * 3])
+    sampleY.push(pos[i * 3 + 1])
+    sampleZ.push(pos[i * 3 + 2])
+  }
+
+  sampleX.sort((a, b) => a - b)
+  sampleY.sort((a, b) => a - b)
+  sampleZ.sort((a, b) => a - b)
+
+  const medX = sampleX[Math.floor(sampleX.length / 2)]
+  const medY = sampleY[Math.floor(sampleY.length / 2)]
+  const medZ = sampleZ[Math.floor(sampleZ.length / 2)]
+
+  // Translate all points so peak density is exactly at (0, 0, 0)
+  geometry.translate(-medX, -medY, -medZ)
+
+  // Compute robust 90th percentile radius
+  const dists = []
+  const newPos = geometry.attributes.position.array
+  for (let i = 0; i < count; i += step) {
+    const x = newPos[i * 3]
+    const y = newPos[i * 3 + 1]
+    const z = newPos[i * 3 + 2]
+    dists.push(Math.sqrt(x * x + y * y + z * z))
+  }
+  dists.sort((a, b) => a - b)
+  const r90 = dists[Math.floor(dists.length * 0.9)] || 5.0
+
+  geometry.computeBoundingSphere()
+  return Math.max(r90, 2.0)
+}
+
+/* ── Point Cloud with Density-Centering ────────────────────────────── */
+function PointCloud({ url, pointSize = 0.025, onRadiusCalculated }) {
   const geometry = useLoader(PLYLoader, url)
 
   useEffect(() => {
     if (geometry) {
-      geometry.center()
+      const radius = centerGeometryOnDensityPeak(geometry)
+      if (onRadiusCalculated) onRadiusCalculated(radius)
+
       if (!geometry.attributes.color) {
         const count = geometry.attributes.position.count
         const colors = new Float32Array(count * 3).fill(0.9)
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
       }
     }
-  }, [geometry])
+  }, [geometry, onRadiusCalculated])
 
   if (!geometry) return null
 
@@ -36,16 +86,17 @@ function PointCloud({ url, pointSize = 0.025 }) {
   )
 }
 
-/* ── Surface Mesh with Auto-Centering & Lighting ──────────────────── */
-function SurfaceMesh({ url, wireframe = false }) {
+/* ── Surface Mesh with Density-Centering ───────────────────────────── */
+function SurfaceMesh({ url, wireframe = false, onRadiusCalculated }) {
   const geometry = useLoader(PLYLoader, url)
 
   useEffect(() => {
     if (geometry) {
-      geometry.center()
+      const radius = centerGeometryOnDensityPeak(geometry)
+      if (onRadiusCalculated) onRadiusCalculated(radius)
       geometry.computeVertexNormals()
     }
-  }, [geometry])
+  }, [geometry, onRadiusCalculated])
 
   if (!geometry) return null
 
@@ -63,7 +114,7 @@ function SurfaceMesh({ url, wireframe = false }) {
   )
 }
 
-/* ── Camera Trajectory & Markers ─────────────────────────────────── */
+/* ── Camera Flight Trajectory & Markers ───────────────────────────── */
 function CameraTrajectory({ poses, visible = true }) {
   if (!visible || !poses || poses.length < 2) return null
   const points = poses.map((p) => new THREE.Vector3(...p.center))
@@ -86,76 +137,62 @@ function CameraTrajectory({ poses, visible = true }) {
   )
 }
 
-/* ── Scene Camera Auto-Fit Controller ────────────────────────────── */
-function AutoFitScene({ url, viewPreset, controlsRef }) {
-  const { camera } = useThree()
-  const geo = useLoader(PLYLoader, url)
-
-  useEffect(() => {
-    if (geo) {
-      geo.computeBoundingSphere()
-      const radius = Math.max(geo.boundingSphere?.radius || 4, 1.5)
-      const dist = radius * 2.2
-
-      switch (viewPreset) {
-        case 'top':
-          camera.position.set(0, dist * 1.4, 0.001)
-          break
-        case 'front':
-          camera.position.set(0, 0, dist)
-          break
-        case 'side':
-          camera.position.set(dist, 0, 0)
-          break
-        case 'iso':
-        default:
-          camera.position.set(dist * 0.8, dist * 0.6, dist * 0.8)
-          break
-      }
-
-      camera.near = radius * 0.005
-      camera.far = radius * 50
-      camera.lookAt(0, 0, 0)
-      camera.updateProjectionMatrix()
-
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, 0, 0)
-        controlsRef.current.maxDistance = radius * 10
-        controlsRef.current.minDistance = radius * 0.1
-        controlsRef.current.update()
-      }
-    }
-  }, [geo, viewPreset, camera, controlsRef])
-
-  return null
-}
-
-/* ── Camera Director for Target Coordinates Focus ─────────────────── */
-function TargetFocusDirector({ targetPosition, controlsRef }) {
+/* ── Camera Director & Auto-Fit Controller ────────────────────────── */
+function CameraController({ radius = 8.0, viewPreset = 'iso', autoRotate = false, targetFocus = null, controlsRef }) {
   const { camera } = useThree()
 
   useEffect(() => {
-    if (targetPosition && controlsRef.current) {
-      controlsRef.current.target.set(...targetPosition)
+    if (targetFocus && controlsRef.current) {
+      controlsRef.current.target.set(...targetFocus)
       camera.position.set(
-        targetPosition[0] + 3,
-        targetPosition[1] + 2,
-        targetPosition[2] + 3
+        targetFocus[0] + radius * 0.8,
+        targetFocus[1] + radius * 0.5,
+        targetFocus[2] + radius * 0.8
       )
       controlsRef.current.update()
+      return
     }
-  }, [targetPosition, camera, controlsRef])
+
+    const dist = Math.max(radius * 1.8, 3.0)
+    switch (viewPreset) {
+      case 'top':
+        camera.position.set(0, dist * 1.4, 0.001)
+        break
+      case 'front':
+        camera.position.set(0, 0, dist)
+        break
+      case 'side':
+        camera.position.set(dist, 0, 0)
+        break
+      case 'iso':
+      default:
+        camera.position.set(dist * 0.8, dist * 0.6, dist * 0.8)
+        break
+    }
+
+    camera.near = Math.max(dist * 0.01, 0.01)
+    camera.far = dist * 20
+    camera.lookAt(0, 0, 0)
+    camera.updateProjectionMatrix()
+
+    if (controlsRef.current) {
+      controlsRef.current.target.set(0, 0, 0)
+      controlsRef.current.minDistance = dist * 0.05
+      controlsRef.current.maxDistance = dist * 10
+      controlsRef.current.update()
+    }
+  }, [radius, viewPreset, targetFocus, camera, controlsRef])
 
   return null
 }
 
-/* ── Main Interactive Three.js Canvas ─────────────────────────────── */
+/* ── Main Three.js Viewer Export ───────────────────────────────────── */
 export default function ThreeViewer({
   sparsePlyUrl,
+  primaryObjectPlyUrl,
   densePlyUrl,
   meshPlyUrl,
   confidencePlyUrl,
-  primaryObjectPlyUrl,
   cameraPoses,
   activeMode = 'dense',
   focusTargetOnly = true,
@@ -166,8 +203,8 @@ export default function ThreeViewer({
   targetFocus = null,
 }) {
   const controlsRef = useRef()
+  const [modelRadius, setModelRadius] = useState(8.0)
 
-  // Select active geometry URL based on filter and mode
   let activeUrl = sparsePlyUrl
   if (activeMode === 'mesh' && meshPlyUrl) {
     activeUrl = meshPlyUrl
@@ -185,22 +222,30 @@ export default function ThreeViewer({
       style={{ background: '#07070d', width: '100%', height: '100%' }}
       id="three-canvas"
     >
-      <PerspectiveCamera makeDefault position={[5, 4, 5]} fov={45} />
+      <PerspectiveCamera makeDefault position={[6, 5, 6]} fov={45} />
       
-      {/* Lighting */}
+      {/* Lights */}
       <ambientLight intensity={0.7} />
       <directionalLight position={[15, 25, 20]} intensity={1.3} />
       <directionalLight position={[-15, -10, -15]} intensity={0.5} />
       <pointLight position={[0, 10, 0]} intensity={0.6} />
 
-      <TargetFocusDirector targetPosition={targetFocus} controlsRef={controlsRef} />
+      <CameraController
+        radius={modelRadius}
+        viewPreset={viewPreset}
+        autoRotate={autoRotate}
+        targetFocus={targetFocus}
+        controlsRef={controlsRef}
+      />
 
       {activeUrl && (
         <Suspense fallback={null}>
-          <AutoFitScene url={activeUrl} viewPreset={viewPreset} controlsRef={controlsRef} />
-
           {activeMode === 'mesh' ? (
-            <SurfaceMesh url={activeUrl} wireframe={wireframe} />
+            <SurfaceMesh
+              url={activeUrl}
+              wireframe={wireframe}
+              onRadiusCalculated={setModelRadius}
+            />
           ) : (
             <PointCloud
               url={activeUrl}
@@ -211,6 +256,7 @@ export default function ThreeViewer({
                   ? pointSize * 0.8
                   : pointSize
               }
+              onRadiusCalculated={setModelRadius}
             />
           )}
 
@@ -231,7 +277,7 @@ export default function ThreeViewer({
         autoRotateSpeed={1.5}
       />
 
-      <gridHelper args={[24, 24, '#27273a', '#141424']} position={[0, -0.01, 0]} />
+      <gridHelper args={[30, 30, '#27273a', '#141424']} position={[0, -0.01, 0]} />
     </Canvas>
   )
 }

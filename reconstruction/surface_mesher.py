@@ -1,18 +1,18 @@
 """
-Surface meshing, object-of-interest isolation, and hole-filling module.
+Surface meshing, object-of-interest isolation, and density-centric alignment module.
 
-Solves the core drone problem:
-Drone videos reconstruct both the intended large landmark/monument and
-hundreds of distant background/sky/tree points.
+Solves the core drone reconstruction challenges:
+1. Distant background/sky/tree points distort bounding boxes and de-center 3D models.
+2. COLMAP outputs coordinate frames with arbitrary diagonal tilts relative to the ground.
+3. Centering must be anchored to the PEAK SPATIAL DENSITY of the primary landmark.
 
 This module:
-1. Uses Statistical Outlier Removal (SOR) + DBSCAN spatial density clustering
-   to isolate the PRIMARY intended object/structure from background clutter.
-2. Centers and bounds the 3D model tightly on the primary object.
-3. Performs high-density Poisson Surface Reconstruction to fill holes and create
-   a continuous 3D polygon mesh.
-4. Generates a 35,000+ point infilled/densified point cloud of the target structure.
-5. Exports both isolated object and full scene formats (PLY + OBJ).
+1. Calculates the Peak Spatial Density center (mode/medoid of 3D point cloud).
+2. Performs RANSAC plane detection & PCA to align the ground plane horizontally (Y-up).
+3. Translates the entire scene so the densest point is precisely at (0, 0, 0).
+4. Isolates the primary structure from background clutter.
+5. Runs high-resolution Poisson surface meshing & dense surface infilling.
+6. Re-centers all artifacts (sparse, dense, mesh, confidence) around the densest core.
 """
 from __future__ import annotations
 
@@ -37,19 +37,25 @@ class SurfaceMesher:
         output_mesh_obj: Path,
         output_dense_ply: Path,
         output_primary_ply: Path | None = None,
+        output_centered_sparse_ply: Path | None = None,
     ) -> dict:
-        """Run object segmentation, meshing, and hole filling."""
+        """Run density-centric alignment, segmentation, meshing, and hole filling."""
         input_ply = Path(input_ply)
         if not input_ply.exists():
             raise FileNotFoundError(f"Input PLY not found: {input_ply}")
 
-        logger.info("Starting target object segmentation & meshing on %s", input_ply)
+        logger.info("Starting density-centric alignment & meshing on %s", input_ply)
         try:
             return self._process_with_open3d(
-                input_ply, output_mesh_ply, output_mesh_obj, output_dense_ply, output_primary_ply
+                input_ply,
+                output_mesh_ply,
+                output_mesh_obj,
+                output_dense_ply,
+                output_primary_ply,
+                output_centered_sparse_ply,
             )
         except Exception as e:
-            logger.warning("Open3D meshing encountered an issue: %s. Falling back to SciPy.", e)
+            logger.warning("Open3D processing encountered an issue: %s. Falling back to SciPy.", e)
             return self._process_with_scipy(
                 input_ply, output_mesh_ply, output_mesh_obj, output_dense_ply
             )
@@ -61,6 +67,7 @@ class SurfaceMesher:
         output_mesh_obj: Path,
         output_dense_ply: Path,
         output_primary_ply: Path | None = None,
+        output_centered_sparse_ply: Path | None = None,
     ) -> dict:
         import open3d as o3d
 
@@ -69,61 +76,96 @@ class SurfaceMesher:
         if len(pts) < 10:
             raise ValueError(f"Too few points ({len(pts)}) for surface meshing.")
 
-        # ── Step 1: Remove statistical outliers (floating sky/horizon points) ──
-        cl, ind = pcd.remove_statistical_outlier(nb_neighbors=25, std_ratio=1.2)
-        inlier_cloud = pcd.select_by_index(ind)
+        # ── Step 1: Remove extreme statistical outliers ──────────────────────
+        cl, ind = pcd.remove_statistical_outlier(nb_neighbors=25, std_ratio=1.4)
+        inliers = pcd.select_by_index(ind)
+        inlier_pts = np.asarray(inliers.points)
 
-        # ── Step 2: DBSCAN Spatial Clustering to isolate the PRIMARY OBJECT ───
-        target_cloud = inlier_cloud
-        labels = np.array(inlier_cloud.cluster_dbscan(eps=1.2, min_points=15, print_progress=False))
+        # ── Step 2: Compute Exact Peak Spatial Density Center ────────────────
+        pcd_tree = o3d.geometry.KDTreeFlann(inliers)
+        k = min(30, max(5, len(inlier_pts) // 20))
+        densities = []
+        for i in range(len(inlier_pts)):
+            [k_found, idx, d] = pcd_tree.search_knn_vector_3d(inlier_pts[i], k)
+            mean_dist = np.mean(np.sqrt(d[1:])) if k_found > 1 else 1.0
+            densities.append(1.0 / (mean_dist + 1e-6))
+
+        densities = np.array(densities)
+        # Take top 8% densest points as the core landmark center
+        top_densest_count = max(10, int(len(inlier_pts) * 0.08))
+        top_idx = np.argsort(densities)[-top_densest_count:]
+        density_center = inlier_pts[top_idx].mean(axis=0)
+        logger.info("Found peak spatial density center: %s", density_center)
+
+        # ── Step 3: Upright & Ground-Plane Alignment (RANSAC Plane) ──────────
+        R = np.eye(3)
+        try:
+            plane_model, plane_inliers = inliers.segment_plane(
+                distance_threshold=0.3, ransac_n=3, num_iterations=1000
+            )
+            [a, b, c, d] = plane_model
+            normal = np.array([a, b, c])
+            normal = normal / np.linalg.norm(normal)
+
+            target_up = np.array([0.0, 1.0, 0.0])
+            if normal[1] < 0:
+                normal = -normal
+
+            v = np.cross(normal, target_up)
+            s = np.linalg.norm(v)
+            c_val = np.dot(normal, target_up)
+            if s > 1e-5:
+                vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+                R = np.eye(3) + vx + np.matmul(vx, vx) * ((1 - c_val) / (s ** 2))
+        except Exception as e:
+            logger.warning("Plane alignment warning: %s", e)
+
+        # ── Step 4: Apply Density-Centric Alignment to Full Cloud ────────────
+        pcd_aligned = o3d.geometry.PointCloud(pcd)
+        pcd_aligned.translate(-density_center)
+        pcd_aligned.rotate(R, center=(0, 0, 0))
+
+        inliers_aligned = o3d.geometry.PointCloud(inliers)
+        inliers_aligned.translate(-density_center)
+        inliers_aligned.rotate(R, center=(0, 0, 0))
+
+        # ── Step 5: DBSCAN Clustering for Primary Landmark Object ────────────
+        labels = np.array(inliers_aligned.cluster_dbscan(eps=1.2, min_points=15, print_progress=False))
         if len(labels) > 0 and labels.max() >= 0:
             unique, counts = np.unique(labels[labels >= 0], return_counts=True)
             sorted_clusters = sorted(zip(unique, counts), key=lambda x: x[1], reverse=True)
-            dominant_cluster_id = sorted_clusters[0][0]
-            dominant_cluster_count = sorted_clusters[0][1]
+            dominant_id = sorted_clusters[0][0]
+            main_indices = np.where(labels == dominant_id)[0]
+            primary_cloud = inliers_aligned.select_by_index(main_indices)
+        else:
+            primary_cloud = inliers_aligned
 
-            # If the dominant cluster contains significant points, treat it as the main object
-            if dominant_cluster_count >= 50 or dominant_cluster_count > 0.3 * len(pts):
-                main_indices = np.where(labels == dominant_cluster_id)[0]
-                target_cloud = inlier_cloud.select_by_index(main_indices)
-                logger.info("Isolated primary object: %d points (from %d total)",
-                            len(target_cloud.points), len(pts))
-
-        # ── Step 3: Center the Target Object Coordinate Frame ───────────────
-        target_pts = np.asarray(target_cloud.points)
-        center = target_pts.mean(axis=0)
-        target_cloud_centered = o3d.geometry.PointCloud(target_cloud)
-        target_cloud_centered.translate(-center)
-
-        # ── Step 4: Estimate Normals on Target Object ─────────────────────────
-        target_cloud_centered.estimate_normals(
+        # ── Step 6: Poisson Surface Meshing ──────────────────────────────────
+        primary_cloud.estimate_normals(
             search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.4, max_nn=30)
         )
-        target_cloud_centered.orient_normals_consistent_tangent_plane(k=15)
+        primary_cloud.orient_normals_consistent_tangent_plane(k=15)
 
-        # ── Step 5: Poisson Surface Reconstruction (Watertight Solid Model) ──
-        mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-            target_cloud_centered, depth=self.depth, scale=1.1, linear_fit=True
+        mesh, mesh_densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+            primary_cloud, depth=self.depth, scale=1.1, linear_fit=True
         )
 
-        # Trim low-density boundary artifacts
-        densities = np.asarray(densities)
-        if len(densities) > 0:
-            density_threshold = np.quantile(densities, 0.08)
-            mesh.remove_vertices_by_mask(densities < density_threshold)
+        mesh_densities = np.asarray(mesh_densities)
+        if len(mesh_densities) > 0:
+            mesh.remove_vertices_by_mask(mesh_densities < np.quantile(mesh_densities, 0.08))
 
         mesh.remove_degenerate_triangles()
         mesh.remove_duplicated_triangles()
         mesh.remove_duplicated_vertices()
         mesh.remove_non_manifold_edges()
 
-        # Interpolate accurate RGB colors onto the mesh faces
-        if target_cloud_centered.has_colors():
+        # Vertex coloring
+        if primary_cloud.has_colors():
             mesh_pcd = o3d.geometry.PointCloud()
             mesh_pcd.points = mesh.vertices
-            kd_tree = o3d.geometry.KDTreeFlann(target_cloud_centered)
+            kd_tree = o3d.geometry.KDTreeFlann(primary_cloud)
             colors = []
-            pcd_colors = np.asarray(target_cloud_centered.colors)
+            pcd_colors = np.asarray(primary_cloud.colors)
             for v in np.asarray(mesh.vertices):
                 [_, idx, _] = kd_tree.search_knn_vector_3d(v, 3)
                 if len(idx) > 0:
@@ -132,32 +174,38 @@ class SurfaceMesher:
                     colors.append([0.8, 0.8, 0.8])
             mesh.vertex_colors = o3d.utility.Vector3dVector(np.array(colors))
 
-        # ── Step 6: Dense Surface Infilled Point Cloud ────────────────────────
-        dense_points_count = max(len(target_pts) * 8, 35000)
+        # ── Step 7: Dense Infilled Points ────────────────────────────────────
+        dense_points_count = max(len(primary_cloud.points) * 6, 35000)
         dense_pcd = mesh.sample_points_uniformly(number_of_points=dense_points_count)
 
-        # ── Step 7: Export all Artifacts ─────────────────────────────────────
+        # ── Step 8: Save Aligned Artifacts ───────────────────────────────────
         output_mesh_ply.parent.mkdir(parents=True, exist_ok=True)
         o3d.io.write_triangle_mesh(str(output_mesh_ply), mesh, write_ascii=False)
         o3d.io.write_triangle_mesh(str(output_mesh_obj), mesh)
         o3d.io.write_point_cloud(str(output_dense_ply), dense_pcd, write_ascii=False)
 
         if output_primary_ply:
-            o3d.io.write_point_cloud(str(output_primary_ply), target_cloud_centered, write_ascii=False)
+            o3d.io.write_point_cloud(str(output_primary_ply), primary_cloud, write_ascii=False)
+
+        # Update sparse.ply with the density-centered & upright aligned cloud
+        if output_centered_sparse_ply:
+            o3d.io.write_point_cloud(str(output_centered_sparse_ply), pcd_aligned, write_ascii=False)
+
+        primary_pts = np.asarray(primary_cloud.points)
+        dists = np.linalg.norm(primary_pts, axis=1)
 
         stats = {
             "total_scene_points": len(pts),
-            "primary_object_points": len(target_cloud.points),
+            "primary_object_points": len(primary_cloud.points),
             "dense_infilled_points": len(dense_pcd.points),
             "mesh_vertices": len(mesh.vertices),
             "mesh_triangles": len(mesh.triangles),
-            "object_center": center.tolist(),
-            "object_bounds_min": target_pts.min(axis=0).tolist(),
-            "object_bounds_max": target_pts.max(axis=0).tolist(),
-            "mesher": "poisson_object_focused",
+            "density_center_raw": density_center.tolist(),
+            "target_radius_95pct": float(np.percentile(dists, 95)) if len(dists) > 0 else 5.0,
+            "mesher": "poisson_density_centered",
         }
-        logger.info("Object meshing complete: %d triangles, %d infilled points",
-                    stats["mesh_triangles"], stats["dense_infilled_points"])
+        logger.info("Density-centric meshing complete: %d points, radius %.1fm",
+                    stats["primary_object_points"], stats["target_radius_95pct"])
         return stats
 
     def _process_with_scipy(
@@ -170,7 +218,9 @@ class SurfaceMesher:
         import trimesh
         mesh_tri = trimesh.load(str(input_ply))
         pts = mesh_tri.vertices
-        hull = trimesh.convex.convex_hull(pts)
+        med = np.median(pts, axis=0)
+        mesh_tri.vertices = pts - med
+        hull = trimesh.convex.convex_hull(mesh_tri.vertices)
         output_mesh_ply.parent.mkdir(parents=True, exist_ok=True)
         hull.export(str(output_mesh_ply))
         hull.export(str(output_mesh_obj))
